@@ -1,0 +1,10 @@
+cmake-build-debug
+.idea
+.cproject
+.mxproject
+.project
+CMakeLists_template.txt
+STM32F446RETX_FLASH.ld
+STM32F446RETX_RAM.ld
+Core/Inc/secrets.h
+CMakeLists.txt
