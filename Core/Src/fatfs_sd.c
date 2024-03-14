@@ -3,12 +3,17 @@
 #define bool BYTE
 
 #include "stm32f4xx_hal.h"
-
 #include "diskio.h"
 #include "fatfs_sd.h"
 #include "main.h"
-#if FS_ENABLE
-uint16_t Timer1, Timer2;					/* 1ms Timer Counter */
+
+
+extern SPI_HandleTypeDef 	hspi3;
+#define HSPI_SDCARD		 	&hspi3
+#define	SD_CS_PORT			SD_CS_GPIO_Port
+#define SD_CS_PIN			SD_CS_Pin
+
+extern volatile uint16_t Timer1, Timer2;					/* 1ms Timer Counter */
 
 static volatile DSTATUS Stat = STA_NOINIT;	/* Disk Status */
 static uint8_t CardType;                    /* Type 0:MMC, 1:SDC, 2:Block addressing */
@@ -243,7 +248,6 @@ static BYTE SD_SendCmd(BYTE cmd, uint32_t arg)
 /***************************************
  * user_diskio.c functions
  **************************************/
-
 /* initialize SD */
 DSTATUS SD_disk_initialize(BYTE drv) 
 {
@@ -264,8 +268,9 @@ DSTATUS SD_disk_initialize(BYTE drv)
 	/* check disk type */
 	type = 0;
 
+	int res = SD_SendCmd(CMD0, 0);
 	/* send GO_IDLE_STATE command */
-	if (SD_SendCmd(CMD0, 0) == 1)
+	if (res == 1)
 	{
 		/* timeout 1 sec */
 		Timer1 = 1000;
@@ -452,7 +457,7 @@ DRESULT SD_disk_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 DRESULT SD_disk_ioctl(BYTE drv, BYTE ctrl, void *buff) 
 {
 	DRESULT res;
-	uint8_t n, csd[16], *ptr = (uint8_t*)buff;
+	uint8_t n, csd[16], *ptr = buff;
 	WORD csize;
 
 	/* pdrv should be 0 */
@@ -543,4 +548,3 @@ DRESULT SD_disk_ioctl(BYTE drv, BYTE ctrl, void *buff)
 
 	return res;
 }
-#endif

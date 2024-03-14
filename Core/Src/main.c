@@ -23,11 +23,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <ESP8266_HAL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <semphr.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include "dht22.h"
 #include "WS2812B.h"
@@ -37,7 +37,6 @@
 #include "UartRingbuffer_multi.h"
 #include "NEC_Decode.h"
 #include "images.h"
-#include "common.h"
 #include "secrets.h"
 /* USER CODE END Includes */
 
@@ -49,7 +48,7 @@ typedef StaticTask_t osStaticThreadDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define PRINT_LOG(fmt, ...) {strcpy(buf, printf_(fmt, __VA_ARGS__)); f_puts(buf, &USERFile);}
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -119,7 +118,7 @@ uint16_t pwmData[(24*LED_MAX)+50];
 bool screen_state;
 
 bool led = false;
-char buf[100];
+char buf[256];
 
 SemaphoreHandle_t sem1;
 
@@ -139,15 +138,6 @@ const char* qr_texts[QR_TEXT_COUNT] = {IP,
 };
 uint8_t qrcode[qrcodegen_BUFFER_LEN_MAX];
 uint8_t tempBuffer[qrcodegen_BUFFER_LEN_MAX];
-
-#if FS_ENABLE
-FATFS fs;
-FATFS *pfs;
-FIL fil;
-FRESULT fres;
-DWORD fre_clust;
-uint32_t totalSpace, freeSpace;
-#endif
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -175,10 +165,15 @@ void StartLCDTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void println(const char * str) {
-  char pcbuf[100];
-  snprintf(pcbuf, 100, "%s\n\r", str);
-  Uart_sendstring(pcbuf, &huart2);
+const char* printf_(const char *fmt, ...) {
+  static char buffer[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  int len = strlen(buffer);
+  HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, -1);
+  return buffer;
 }
 
 void drawSquare(uint8_t x, uint8_t y, uint8_t _x, uint8_t _y, uint8_t multiplier, bool state) {
@@ -221,7 +216,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       // textToQrCode(16, 64, qr_texts[qr_text_counter], 2);
     }
     else ST7735_Backlight_Off();
-    println("Screen change state");
+    printf_("Screen change state\n\r");
   }
 }
 
@@ -255,7 +250,6 @@ void NEC_Handle() {
       default:
         snprintf(nec_buf, 100, "cmd: %3d", NEC_GetCommand(&nec));
         ST7735_WriteString(0, 40, nec_buf, Font_11x18, ST7735_GREEN, ST7735_BLACK);
-        println(nec_buf);
         break;
       case 90:
         if(qr_text_counter == 0) qr_text_counter = QR_TEXT_COUNT-1;
@@ -365,13 +359,11 @@ int main(void)
   MX_TIM7_Init();
   MX_ADC1_Init();
   MX_TIM2_Init();
-  MX_SPI3_Init();
   MX_FATFS_Init();
+  MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
   DHT_Init();
-  Ringbuf_init();
-  println("");
-  println("Controller started");
+  printf_("\n\rController started\n\r");
 #if ESP_MODE
   HAL_GPIO_WritePin(WL_GPIO_Port, WL_Pin, GPIO_PIN_SET);
 #endif
@@ -379,8 +371,6 @@ int main(void)
   ESP_Init_Server(WIFI_NAME, WIFI_PASS);
 #elif ESP_MODE == 2
   ESP_Init_SoftAP(HOTSPOT_NAME, HOTSPOT_PASS);
-#else
-  HAL_GPIO_WritePin(WL_GPIO_Port, WL_Pin, GPIO_PIN_RESET);
 #endif
   ST7735_Init();
   // Set_LED(0, 0, 0, 0);
@@ -398,51 +388,39 @@ int main(void)
   set_tardis();
   set_tardis();
   set_tardis();
-  println("ST7735S is on");
+  printf_("ST7735S is on\n\r");
 
   NEC_Init(&nec);
 
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
 
-#if FS_ENABLE
+  FRESULT res;
+  res = f_mount(&USERFatFS, "", 1);
+  if(res) printf_("mount: %d\n\r", res);
+  else {
+    res = f_open(&USERFile, "/test.txt", FA_CREATE_ALWAYS | FA_WRITE);
+    if(res) printf_("create: %d\n\r", res);
+    else {
+      char text[] = "test creation\n\r";
+      f_puts(text, &USERFile);
+      PRINT_LOG("Logging: %s", "hi!");
+      printf_("\n\r");
+      f_close(&USERFile);
+    }
+    res = f_open(&USERFile, "/test.txt", FA_READ);
+    if(res) printf_("open: %d\n\r", res);
+    else {
+      const int fsize = f_size(&USERFile)+1;
+      char text[fsize];
+      uint32_t size;
+      f_read(&USERFile, text, fsize, &size);
+      f_close(&USERFile);
+      text[size] = '\0';
+      printf_("text: %s\n\r", text);
+    }
 
-  f_mount(&fs, "", 0);
-
-  /* Open file to write */
-  f_open(&fil, "first.txt", FA_OPEN_ALWAYS | FA_READ | FA_WRITE);
-
-  /* Check freeSpace space */
-  f_getfree("", &fre_clust, &pfs);
-
-  totalSpace = (uint32_t)((pfs->n_fatent - 2) * pfs->csize * 0.5);
-  freeSpace = (uint32_t)(fre_clust * pfs->csize * 0.5);
-
-  snprintf(buf, 100, "ts: %d, fs: %d", totalSpace, freeSpace);
-  PC_println(buf);
-
-  /* Writing text */
-  f_puts("STM32 SD Card I/O Example via SPI\n", &fil);
-  f_puts("Save the world!!!", &fil);
-
-  /* Close file */
-  f_close(&fil);
-
-  /* Open file to read */
-  f_open(&fil, "first.txt", FA_READ);
-
-  while(f_gets(buf, sizeof(buf), &fil))
-  {
-    /* SWV output */
-    PC_println(buf);
-    fflush(stdout);
+    f_mount(NULL, "", 0);
   }
-
-  /* Close file */
-  f_close(&fil);
-
-  /* Unmount SDCARD */
-  f_mount(NULL, "", 1);
-#endif
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -481,10 +459,10 @@ int main(void)
   LCDTaskHandle = osThreadNew(StartLCDTask, NULL, &LCDTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  if(!defaultTaskHandle) println("default is null");
-  if(!ServerTaskHandle) println("server is null");
-  if(!DHTTaskHandle) println("dht is null");
-  if(!LCDTaskHandle) println("lcd is null");
+  if(!defaultTaskHandle) printf_("default is null\n\r");
+  if(!ServerTaskHandle) printf_("server is null\n\r");
+  if(!DHTTaskHandle) printf_("dht is null\n\r");
+  if(!LCDTaskHandle) printf_("lcd is null\n\r");
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
@@ -665,7 +643,7 @@ static void MX_SPI3_Init(void)
   hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi3.Init.NSS = SPI_NSS_SOFT;
-  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -1045,7 +1023,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, WL_Pin|TFT_DC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(WL_GPIO_Port, WL_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(TFT_DC_GPIO_Port, TFT_DC_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -1090,14 +1071,14 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : SD_CS_Pin */
   GPIO_InitStruct.Pin = SD_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(SD_CS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : WL_Pin */
   GPIO_InitStruct.Pin = WL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(WL_GPIO_Port, &GPIO_InitStruct);
 
@@ -1226,6 +1207,27 @@ void StartLCDTask(void *argument)
     osDelay(300);
   }
   /* USER CODE END StartLCDTask */
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM5 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM5) {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
 }
 
 /**
